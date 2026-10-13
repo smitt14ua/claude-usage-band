@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register, SessionRateLimit } from 'claude-code'
+import type { PluginOptions, Register, SessionRateLimit } from 'claude-code'
 
 import type { Usage } from '../types'
 
@@ -42,18 +42,55 @@ const toUsage = (e: { rateLimits: SessionRateLimit[]; context: { percent?: numbe
   costUsd: e.cost?.usd,
 })
 
-const format = (data: Usage, now: number, hasResets: boolean) =>
-  [
-    ...data.limits.map(limit => {
-      const reset = hasResets ? untilReset(limit.resetsAt, now) : ''
+type Settings = {
+  position: 'hint-line' | 'above-prompt'
+  showResets: boolean
+  showContext: boolean
+  showCost: boolean
+  warnAt: number
+}
 
-      return `${label(limit.kind)} ${Math.round(limit.percentUsed)}%${reset ? ` (${reset})` : ''}`
-    }),
-    ...(data.contextPercent === undefined ? [] : [`ctx ${data.contextPercent}%`]),
-    ...(data.costUsd === undefined ? [] : [`$${data.costUsd.toFixed(2)}`]),
-  ].join(' · ')
+const toSettings = (options: PluginOptions): Settings => ({
+  position: options.position === 'above-prompt' ? 'above-prompt' : 'hint-line',
+  showResets: options.showResets !== false,
+  showContext: options.showContext !== false,
+  showCost: options.showCost !== false,
+  warnAt: typeof options.warnAt === 'number' ? options.warnAt : 90,
+})
 
-export const register: Register = on => {
+type Segment = { name: string; percent?: number; rest: string }
+
+const toSegments = (data: Usage, settings: Settings, now: number, hasResets: boolean): Segment[] => [
+  ...data.limits.map(limit => {
+    const reset = hasResets && settings.showResets ? untilReset(limit.resetsAt, now) : ''
+
+    return { name: `${label(limit.kind)} `, percent: limit.percentUsed, rest: reset ? ` (${reset})` : '' }
+  }),
+  ...(settings.showContext && data.contextPercent !== undefined
+    ? [{ name: 'ctx ', percent: data.contextPercent, rest: '' }]
+    : []),
+  ...(settings.showCost && data.costUsd !== undefined
+    ? [{ name: `$${data.costUsd.toFixed(2)}`, rest: '' }]
+    : []),
+]
+
+const isHigh = (percent: number, settings: Settings) => settings.warnAt > 0 && percent >= settings.warnAt
+
+const tone = (percent: number, settings: Settings) =>
+  isHigh(percent, settings) ? 'error' : percent >= settings.warnAt - 20 ? 'warning' : 'success'
+
+const percentText = (percent: number, settings: Settings, isMarked: boolean) =>
+  `${Math.round(percent)}%${isMarked && isHigh(percent, settings) ? '!' : ''}`
+
+// Plain text for the hint line: no colors there, high values marked with "!"
+const toText = (segments: Segment[], settings: Settings) =>
+  segments
+    .map(s => `${s.name}${s.percent === undefined ? '' : percentText(s.percent, settings, true)}${s.rest}`)
+    .join(' · ')
+
+export const register: Register = (on, options) => {
+  const settings = toSettings(options)
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     const now = toUsage(await $.session.usage())
@@ -70,7 +107,7 @@ export const register: Register = on => {
 
   // Usage at the right end of the hint line under the prompt
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const data = await read($, usage)
+    const data = settings.position === 'hint-line' ? await read($, usage) : null
 
     if (data === null || e.viewport === undefined) {
       return next(e)
@@ -79,9 +116,9 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const before = (e.props.hint.startsWith(MODE_HINT) ? MODE_LABEL : 0) + e.props.hint.length
     const room = e.viewport.columns - before - MARGIN
-    const text = [format(data, now, true), format(data, now, false)].find(
-      one => one.length > 0 && one.length + 2 <= room,
-    )
+    const text = [true, false]
+      .map(hasResets => toText(toSegments(data, settings, now, hasResets), settings))
+      .find(one => one.length > 0 && one.length + 2 <= room)
 
     if (text === undefined) {
       return next(e)
@@ -91,5 +128,35 @@ export const register: Register = on => {
     const tail = ' '.repeat(room - text.length) + text
 
     return next({ ...e, props: { ...e.props, tail } })
+  })
+
+  // Usage in a right-aligned band above the prompt, percentages colored
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const data = settings.position === 'above-prompt' ? await read($, usage) : null
+    const now = data === null ? 0 : await $.clock.now()
+    const segments = data === null ? [] : toSegments(data, settings, now, e.props.bodyColumns >= 60)
+
+    if (e.props.hasSurvey || segments.length === 0) {
+      return next(e)
+    }
+
+    const { Box, Text } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="row" justifyContent="flex-end">
+        <Text dimColor>
+          {segments.flatMap((s, i) => [
+            ...(i === 0 ? [] : [' · ']),
+            <Text>
+              {s.name}
+              {s.percent === undefined ? null : (
+                <Text color={tone(s.percent, settings)}>{percentText(s.percent, settings, false)}</Text>
+              )}
+              {s.rest}
+            </Text>,
+          ])}
+        </Text>
+      </Box>
+    )
   })
 }

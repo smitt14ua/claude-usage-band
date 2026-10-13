@@ -1,7 +1,40 @@
 {
   "name": "usage-band",
-  "version": "0.1.0",
-  "description": "Shows plan usage (5h and weekly limits), context fill and session cost above the prompt",
+  "version": "0.2.0",
+  "description": "Shows plan usage (5h and weekly limits), context fill and session cost beside the prompt",
   "author": { "name": "Smith" },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "position": {
+      "type": "string",
+      "title": "Position",
+      "description": "hint-line: at the right end of the line under the prompt, no colors; above-prompt: a line above the prompt, percentages colored",
+      "options": ["hint-line", "above-prompt"],
+      "default": "hint-line"
+    },
+    "showResets": {
+      "type": "boolean",
+      "title": "Show reset times",
+      "description": "Show when each rate-limit window resets, e.g. (4h0m)",
+      "default": true
+    },
+    "showContext": {
+      "type": "boolean",
+      "title": "Show context fill",
+      "description": "Show how full the context window is (ctx)",
+      "default": true
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show session cost",
+      "description": "Show what the session has cost so far ($)",
+      "default": true
+    },
+    "warnAt": {
+      "type": "number",
+      "title": "Warning threshold, %",
+      "description": "From this percentage a value is marked with ! on the hint line, red above the prompt (yellow from 20 below it); 0 turns it off",
+      "default": 90
+    }
+  }
 }

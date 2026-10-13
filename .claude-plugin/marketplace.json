@@ -1,0 +1,6 @@
+{
+  "name": "claude-usage-band",
+  "description": "Claude Code mod: plan usage, context fill and session cost above the prompt",
+  "owner": { "name": "Smith" },
+  "plugins": [{ "name": "usage-band", "source": "./" }]
+}

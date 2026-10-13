@@ -1,0 +1,7 @@
+{
+  "name": "usage-band",
+  "version": "0.1.0",
+  "description": "Shows plan usage (5h and weekly limits), context fill and session cost above the prompt",
+  "author": { "name": "Smith" },
+  "types": "./types/index.d.ts"
+}

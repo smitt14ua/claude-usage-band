@@ -10,7 +10,7 @@ A Claude Code mod that shows your plan usage beside the prompt, by default at th
 - **ctx**: how full the context window of the conversation is.
 - **$**: what the session has cost so far.
 
-The figures update after each model response. The rate limits appear only on a Claude subscription (Pro/Max), and nothing shows before the first response. Where the line is short, the reset times go first, then the whole usage.
+The figures update after each model response, and the line redraws each minute, so reset times count down and a window whose reset has passed shows 0%. The rate limits appear only on a Claude subscription (Pro/Max); until a session's first response it shows the last ones it saw, from an earlier session. Where the line is short, the reset times go first, then the last figures one by one.
 
 ## Settings
 

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { PluginOptions, Register, SessionRateLimit } from 'claude-code'
 
-import type { Usage } from '../types'
+import type { Limit, Usage } from '../types'
 
 const usage = atom({ plugin: 'usage-band', key: 'usage' } as const, null)
 
@@ -36,11 +36,27 @@ const MODE_LABEL = 25
 // Prompt box padding and a gap before the usage
 const MARGIN = 4
 
-const toUsage = (e: { rateLimits: SessionRateLimit[]; context: { percent?: number }; cost?: { usd: number } }): Usage => ({
-  limits: e.rateLimits,
+// The figures redraw on this period too, so reset times count down and a passed reset shows 0%
+const TICK_MS = 60_000
+// The last rate limits, kept across sessions: a session has none until its first response
+const LIMITS_KEY = 'limits'
+
+// A reading without rate limits (none yet, or a response that carried none) keeps the last ones
+const toUsage = (
+  e: { rateLimits: SessionRateLimit[]; context: { percent?: number }; cost?: { usd: number } },
+  lastLimits: Limit[],
+): Usage => ({
+  limits: e.rateLimits.length > 0 ? e.rateLimits : lastLimits,
   contextPercent: e.context.percent,
   costUsd: e.cost?.usd,
 })
+
+const isLimits = (value: unknown): value is Limit[] =>
+  Array.isArray(value) &&
+  value.every(one => typeof one?.kind === 'string' && typeof one?.percentUsed === 'number')
+
+// A window whose reset has passed starts over at 0%
+const isPast = (limit: Limit, now: number) => limit.resetsAt !== undefined && Date.parse(limit.resetsAt) <= now
 
 type Settings = {
   position: 'hint-line' | 'above-prompt'
@@ -63,8 +79,9 @@ type Segment = { name: string; percent?: number; rest: string }
 const toSegments = (data: Usage, settings: Settings, now: number, hasResets: boolean): Segment[] => [
   ...data.limits.map(limit => {
     const reset = hasResets && settings.showResets ? untilReset(limit.resetsAt, now) : ''
+    const percent = isPast(limit, now) ? 0 : limit.percentUsed
 
-    return { name: `${label(limit.kind)} `, percent: limit.percentUsed, rest: reset ? ` (${reset})` : '' }
+    return { name: `${label(limit.kind)} `, percent, rest: reset ? ` (${reset})` : '' }
   }),
   ...(settings.showContext && data.contextPercent !== undefined
     ? [{ name: 'ctx ', percent: data.contextPercent, rest: '' }]
@@ -93,14 +110,22 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    const now = toUsage(await $.session.usage())
-    await update($, usage, () => now)
+    const current = await $.session.usage()
+    const kept = await $.store.get(LIMITS_KEY)
+    await update($, usage, last =>
+      toUsage(current, last && last.limits.length > 0 ? last.limits : isLimits(kept) ? kept : []),
+    )
+    // Nothing else draws the hint again while the session is idle
+    $.clock.every(TICK_MS, () => $.ui.invalidate('ui.render'))
 
     return result
   })
 
   on('session.measure', async ($, e, next) => {
-    await update($, usage, () => toUsage(e))
+    await update($, usage, last => toUsage(e, last?.limits ?? []))
+    if (e.rateLimits.length > 0) {
+      await $.store.set(LIMITS_KEY, e.rateLimits)
+    }
 
     return next(e)
   })
@@ -116,8 +141,11 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const before = (e.props.hint.startsWith(MODE_HINT) ? MODE_LABEL : 0) + e.props.hint.length
     const room = e.viewport.columns - before - MARGIN
-    const text = [true, false]
-      .map(hasResets => toText(toSegments(data, settings, now, hasResets), settings))
+    // Where the row is short: the reset times go first, then the last figures one by one
+    const full = toSegments(data, settings, now, true)
+    const short = toSegments(data, settings, now, false)
+    const text = [full, ...short.map((_, i) => short.slice(0, short.length - i))]
+      .map(segments => toText(segments, settings))
       .find(one => one.length > 0 && one.length + 2 <= room)
 
     if (text === undefined) {
